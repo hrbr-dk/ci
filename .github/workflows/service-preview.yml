@@ -1,0 +1,225 @@
+name: Service preview
+
+# Per-PR preview environments, and their teardown. The same chart as dev, installed
+# from the same registry at a pinned version, with different values.
+#
+# Deleting the namespace is the entire teardown. There is no Cloudflare state to
+# unwind, because the wildcard tunnel rule covers every host in the zone.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      namespace:
+        description: >-
+          Preview namespace. Must equal the first label of `host` — that invariant is
+          what makes two repositories with the same PR number unable to collide.
+        required: true
+        type: string
+      host:
+        required: true
+        type: string
+      source-namespace:
+        description: Namespace the pull secret and any copied secrets come from.
+        required: true
+        type: string
+      values-file:
+        required: false
+        type: string
+        default: deploy/preview.yaml
+      images:
+        required: false
+        type: string
+        default: "[]"
+      chart-registry:
+        required: true
+        type: string
+      owner:
+        required: true
+        type: string
+      copy-secrets:
+        required: false
+        type: string
+        default: ""
+      test-command:
+        required: false
+        type: string
+        default: ""
+      submodules:
+        required: false
+        type: string
+        default: "false"
+      runs-on:
+        required: false
+        type: string
+        default: self-hosted
+      extra-set:
+        required: false
+        type: string
+        default: ""
+      timeout:
+        required: false
+        type: string
+        default: 10m
+      teardown:
+        description: Delete the environment instead of creating it.
+        required: false
+        type: boolean
+        default: false
+      comment-extra:
+        description: Extra markdown appended to the sticky PR comment.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app-id:
+        required: true
+      private-key:
+        required: true
+
+jobs:
+  teardown:
+    if: inputs.teardown
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      pull-requests: write
+    steps:
+      # helm uninstall first so the release secrets go with the namespace rather than
+      # lingering as orphaned Secret objects nothing will ever clean up.
+      - name: Uninstall and delete
+        run: |
+          helm uninstall "${{ inputs.service }}" -n "${{ inputs.namespace }}" --wait --ignore-not-found || true
+          kubectl delete namespace "${{ inputs.namespace }}" --ignore-not-found --wait=false
+
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview-${{ inputs.service }}
+          message: |
+            ### Preview — `${{ inputs.service }}`
+
+            Environment removed. Re-add the `preview` label to recreate it.
+
+  deploy:
+    if: ${{ !inputs.teardown }}
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+          owner: ${{ inputs.owner }}
+
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.submodules == 'true' && 'recursive' || '' }}
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Compute versions
+        id: version
+        run: |
+          set -euo pipefail
+          pr=${{ github.event.pull_request.number }}
+          sha=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          base=$(awk '/^version:/ {print $2}' "charts/${{ inputs.service }}/Chart.yaml")
+          echo "image-tag=pr-$pr-$sha" >> "$GITHUB_OUTPUT"
+          echo "chart-version=$base-pr$pr.$sha" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=pr-$pr-$sha" >> "$GITHUB_ENV"
+
+      - name: Run tests
+        if: inputs.test-command != ''
+        run: ${{ inputs.test-command }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push images
+        if: inputs.images != '[]'
+        env:
+          IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          echo "$IMAGES" | jq -c '.[]' | while read -r img; do
+            repo=$(jq -r '.repository' <<<"$img")
+            file=$(jq -r '.dockerfile' <<<"$img")
+            target=$(jq -r '.target // empty' <<<"$img")
+            context=$(jq -r '.context // "."' <<<"$img")
+            args=(-f "$file" -t "$repo:$IMAGE_TAG")
+            [ -n "$target" ] && args+=(--target "$target")
+            docker build "${args[@]}" "$context"
+            docker push "$repo:$IMAGE_TAG"
+          done
+
+      - name: Prepare the namespace
+        uses: hrbr-dk/ci/actions/preview-namespace@v1
+        with:
+          namespace: ${{ inputs.namespace }}
+          source-namespace: ${{ inputs.source-namespace }}
+          org: ${{ inputs.owner }}
+          repo: ${{ github.event.repository.name }}
+          pr: ${{ github.event.pull_request.number }}
+          copy-secrets: ${{ inputs.copy-secrets }}
+
+      - name: Publish and install the chart
+        uses: hrbr-dk/ci/actions/helm-release@v1
+        with:
+          service: ${{ inputs.service }}
+          chart-registry: ${{ inputs.chart-registry }}
+          chart-version: ${{ steps.version.outputs.chart-version }}
+          app-version: ${{ steps.version.outputs.image-tag }}
+          namespace: ${{ inputs.namespace }}
+          values-file: ${{ inputs.values-file }}
+          timeout: ${{ inputs.timeout }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          set: |
+            image.tag=${{ steps.version.outputs.image-tag }}
+            host=${{ inputs.host }}
+            ${{ inputs.extra-set }}
+
+      - name: Show logs
+        if: always()
+        run: |
+          kubectl -n "${{ inputs.namespace }}" logs \
+            -l app.kubernetes.io/instance=${{ inputs.service }} --tail=100 || true
+
+      - uses: marocchino/sticky-pull-request-comment@v2
+        if: always()
+        with:
+          header: preview-${{ inputs.service }}
+          message: |
+            ### Preview — `${{ inputs.service }}`
+
+            | | |
+            | --- | --- |
+            | **Status** | ${{ job.status }} |
+            | **URL** | https://${{ inputs.host }} |
+            | **Namespace** | `${{ inputs.namespace }}` |
+            | **Image** | `${{ steps.version.outputs.image-tag }}` |
+            | **Chart** | `${{ steps.version.outputs.chart-version }}` |
+            ${{ inputs.comment-extra }}
+
+            Remove the `preview` label or close this PR to tear the environment down.
+
+      - name: Prune build cache
+        if: always()
+        run: |
+          docker image prune -f || true
+          docker builder prune -f --keep-storage 20GB || true

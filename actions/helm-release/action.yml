@@ -1,0 +1,84 @@
+name: Helm release
+description: Package a chart, push it to an OCI registry, and install that exact version.
+
+inputs:
+  service:
+    description: Chart and release name.
+    required: true
+  chart-registry:
+    description: OCI registry the chart is published to, e.g. oci://ghcr.io/<org>/charts.
+    required: true
+  chart-version:
+    description: Immutable version to publish and install.
+    required: true
+  app-version:
+    description: Image tag, recorded as the chart's appVersion so `helm list` shows what runs.
+    required: true
+  namespace:
+    required: true
+  values-file:
+    description: Environment values, from outside the chart directory.
+    required: true
+  set:
+    description: Newline-separated key=value pairs passed as --set.
+    required: false
+    default: ""
+  registry-username:
+    required: true
+  registry-password:
+    required: true
+  timeout:
+    required: false
+    default: 10m
+
+runs:
+  using: composite
+  steps:
+    - name: Package and push the chart
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        CHART_REGISTRY: ${{ inputs.chart-registry }}
+        CHART_VERSION: ${{ inputs.chart-version }}
+        APP_VERSION: ${{ inputs.app-version }}
+        REGISTRY_USERNAME: ${{ inputs.registry-username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+      run: |
+        set -euo pipefail
+        registry=${CHART_REGISTRY#oci://}
+        registry=${registry%%/*}
+        helm registry login "$registry" -u "$REGISTRY_USERNAME" --password-stdin <<<"$REGISTRY_PASSWORD"
+
+        helm package "charts/$SERVICE" \
+          --version "$CHART_VERSION" \
+          --app-version "$APP_VERSION" \
+          --destination "$RUNNER_TEMP"
+
+        helm push "$RUNNER_TEMP/$SERVICE-$CHART_VERSION.tgz" "$CHART_REGISTRY"
+
+    # Installing from the registry rather than from ./charts is the point: it is the
+    # only way to be sure the artifact that was published is the artifact that runs,
+    # and it is what lets another repository install this chart at a pinned version.
+    - name: Install from the registry
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        CHART_REGISTRY: ${{ inputs.chart-registry }}
+        CHART_VERSION: ${{ inputs.chart-version }}
+        NAMESPACE: ${{ inputs.namespace }}
+        VALUES_FILE: ${{ inputs.values-file }}
+        SET_ARGS: ${{ inputs.set }}
+        TIMEOUT: ${{ inputs.timeout }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r pair; do
+          [ -n "$pair" ] && args+=(--set "$pair")
+        done <<<"$SET_ARGS"
+
+        helm upgrade --install "$SERVICE" "$CHART_REGISTRY/$SERVICE" \
+          --version "$CHART_VERSION" \
+          --namespace "$NAMESPACE" --create-namespace \
+          --values "$VALUES_FILE" \
+          "${args[@]}" \
+          --atomic --wait --timeout "$TIMEOUT"

@@ -1,0 +1,70 @@
+name: Preview namespace
+description: Create and label a per-PR namespace, and copy the image pull secret into it.
+
+inputs:
+  namespace:
+    description: >-
+      Preview namespace. Must equal the first label of the preview host — the reaper
+      and every teardown path depend on that, and it is what makes a collision between
+      two repositories impossible.
+    required: true
+  source-namespace:
+    description: Namespace to copy ghcr-pull-secret from.
+    required: true
+  org:
+    description: GitHub organisation, so one reaper can serve more than one.
+    required: true
+  repo:
+    description: Repository name, used to resolve the PR state during reaping.
+    required: true
+  pr:
+    required: true
+  copy-secrets:
+    description: Additional secrets to copy from the source namespace, one per line.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Create and label
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        ORG: ${{ inputs.org }}
+        REPO: ${{ inputs.repo }}
+        PR: ${{ inputs.pr }}
+      run: |
+        set -euo pipefail
+        kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+        kubectl label namespace "$NS" \
+          hrbr.dk/preview=true \
+          hrbr.dk/org="$ORG" \
+          hrbr.dk/repo="$REPO" \
+          hrbr.dk/pr="$PR" \
+          pod-security.kubernetes.io/enforce=baseline \
+          pod-security.kubernetes.io/warn=restricted \
+          --overwrite
+
+    # One code path for the pull secret, everywhere. It is created by the
+    # infrastructure repo from a long-lived token and copied from there — never minted
+    # from GITHUB_TOKEN, which expires with the job and leaves a pod that restarts an
+    # hour later unable to pull its own image.
+    - name: Copy secrets
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        SRC: ${{ inputs.source-namespace }}
+        EXTRA: ${{ inputs.copy-secrets }}
+      run: |
+        set -euo pipefail
+        copy() {
+          kubectl get secret "$1" -n "$SRC" -o json \
+            | jq --arg ns "$NS" --arg n "$1" \
+                '{apiVersion, kind, type, data} + {metadata: {name: $n, namespace: $ns}}' \
+            | kubectl apply -f -
+        }
+        copy ghcr-pull-secret
+        while IFS= read -r s; do
+          [ -n "$s" ] && copy "$s"
+        done <<<"$EXTRA"
