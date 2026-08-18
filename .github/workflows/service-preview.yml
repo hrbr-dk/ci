@@ -150,22 +150,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Each entry names the values key that receives its tag, so a service with a
+      # separate migration image does not need the caller to repeat the tag it cannot
+      # know yet.
       - name: Build and push images
+        id: images
         if: inputs.images != '[]'
         env:
           IMAGES: ${{ inputs.images }}
         run: |
           set -euo pipefail
-          echo "$IMAGES" | jq -c '.[]' | while read -r img; do
+          sets=""
+          while IFS= read -r img; do
             repo=$(jq -r '.repository' <<<"$img")
             file=$(jq -r '.dockerfile' <<<"$img")
             target=$(jq -r '.target // empty' <<<"$img")
             context=$(jq -r '.context // "."' <<<"$img")
+            key=$(jq -r '.set // "image.tag"' <<<"$img")
+
             args=(-f "$file" -t "$repo:$IMAGE_TAG")
             [ -n "$target" ] && args+=(--target "$target")
             docker build "${args[@]}" "$context"
             docker push "$repo:$IMAGE_TAG"
-          done
+
+            sets="$sets$key=$IMAGE_TAG"$'\n'
+          done < <(jq -c '.[]' <<<"$IMAGES")
+
+          {
+            echo "sets<<EOF"
+            printf '%s' "$sets"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare the namespace
         uses: hrbr-dk/ci/actions/preview-namespace@v1
@@ -190,7 +205,7 @@ jobs:
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
           set: |
-            image.tag=${{ steps.version.outputs.image-tag }}
+            ${{ steps.images.outputs.sets }}
             host=${{ inputs.host }}
             ${{ inputs.extra-set }}
 

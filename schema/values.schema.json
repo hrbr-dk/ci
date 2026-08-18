@@ -3,94 +3,179 @@
   "title": "hrbr/tempo service chart values",
   "description": "The shape every chart in the estate exposes. Copy verbatim into charts/<service>/values.schema.json; extend under `config` rather than at the top level.",
   "type": "object",
-  "required": ["image", "host", "env"],
+  "required": [
+    "image",
+    "host",
+    "env"
+  ],
   "properties": {
     "image": {
       "type": "object",
-      "required": ["repository", "tag"],
+      "required": [
+        "repository",
+        "tag"
+      ],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
         "tag": {
           "type": "string",
-          "minLength": 1,
-          "description": "Always set by CI. There is deliberately no floating default: `latest` means a mistake deploys an arbitrary build instead of failing."
+          "description": "Always set by CI. Deliberately empty in values.yaml: there is no floating default, because `latest` means a mistake deploys an arbitrary build instead of failing. The template enforces presence with `required`, which fails at render time with a message rather than at runtime with the wrong image."
         },
-        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
       }
     },
     "imagePullSecrets": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name"],
-        "properties": { "name": { "type": "string" } }
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
       }
     },
-    "replicaCount": { "type": "integer", "minimum": 0 },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
+    },
     "env": {
-      "enum": ["dev", "preview"],
+      "enum": [
+        "dev",
+        "preview"
+      ],
       "description": "The only environment discriminator. Templates guard on this and nothing else."
     },
     "host": {
       "type": "string",
-      "pattern": "^[a-z0-9-]+\\.[a-z0-9.-]+$",
-      "description": "Single label plus zone. The tunnel wildcard and Universal SSL both stop at one level, so a two-label host is neither routed nor certified."
+      "pattern": "^$|^[a-z0-9-]+\\.[a-z0-9.-]+$",
+      "description": "Single label plus zone, supplied by CI. The tunnel wildcard and Universal SSL both stop at one level, so a two-label host is neither routed nor certified. Empty is allowed here and rejected by the template."
     },
     "ingress": {
       "type": "object",
       "properties": {
-        "entryPoints": { "type": "array", "items": { "type": "string" } }
+        "entryPoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       },
       "not": {
-        "required": ["tls"]
+        "required": [
+          "tls"
+        ]
       },
       "description": "No tls key. Entrypoint-level TLS already supplies the wildcard; a per-router certResolver overrides it and orders one certificate per host."
     },
     "service": {
       "type": "object",
       "properties": {
-        "port": { "type": "integer" },
-        "targetPort": { "type": "integer" },
-        "scheme": { "enum": ["http", "h2c", "https"] }
+        "port": {
+          "type": "integer"
+        },
+        "targetPort": {
+          "type": "integer"
+        },
+        "scheme": {
+          "enum": [
+            "http",
+            "h2c",
+            "https"
+          ]
+        }
       }
     },
     "probes": {
       "type": "object",
       "properties": {
-        "path": { "type": "string" },
-        "port": { "type": "integer" },
-        "readiness": { "type": "object" },
-        "liveness": { "type": "object" }
+        "path": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "readiness": {
+          "type": "object"
+        },
+        "liveness": {
+          "type": "object"
+        }
       }
     },
-    "resources": { "type": "object" },
-    "podSecurityContext": { "type": "object" },
-    "securityContext": { "type": "object" },
+    "resources": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
     "database": {
       "type": "object",
       "properties": {
-        "host": { "type": "string" },
-        "port": { "type": ["string", "integer"] },
-        "name": { "type": "string" },
-        "user": { "type": "string" },
-        "passwordSecret": { "type": "string" },
-        "passwordKey": { "type": "string" }
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "passwordSecret": {
+          "type": "string"
+        },
+        "passwordKey": {
+          "type": "string"
+        }
       }
     },
     "migration": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "image": {
           "type": "object",
           "properties": {
-            "repository": { "type": "string" },
-            "tag": { "type": "string" }
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
           }
         },
-        "backoffLimit": { "type": "integer" },
-        "hookDeletePolicy": { "type": "string" }
+        "backoffLimit": {
+          "type": "integer"
+        },
+        "hookDeletePolicy": {
+          "type": "string"
+        }
       }
     },
     "preview": {
@@ -99,17 +184,29 @@
         "postgres": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" },
-            "image": { "type": "string" },
-            "storage": { "type": "string" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "image": {
+              "type": "string"
+            },
+            "storage": {
+              "type": "string"
+            }
           }
         },
         "seed": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" },
-            "sourceSecret": { "type": "string" },
-            "sourceDatabase": { "type": "string" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "sourceSecret": {
+              "type": "string"
+            },
+            "sourceDatabase": {
+              "type": "string"
+            }
           }
         }
       }
