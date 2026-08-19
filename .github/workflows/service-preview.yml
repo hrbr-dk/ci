@@ -74,10 +74,12 @@ on:
         type: string
         default: ""
     secrets:
+      # Optional. A service with no private submodules needs no GitHub App at all —
+      # checkout falls back to GITHUB_TOKEN, which can read its own repository.
       app-id:
-        required: true
+        required: false
       private-key:
-        required: true
+        required: false
 
 jobs:
   teardown:
@@ -107,11 +109,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # `secrets` cannot be read from a step-level `if:`; `env` can, and job-level
+      # `env` may read secrets. This is the only reason this variable exists.
+      APP_ID: ${{ secrets.app-id }}
       pull-requests: write
 
     steps:
       - name: Generate token
         id: app-token
+        if: env.APP_ID != ''
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.app-id }}
@@ -119,13 +126,14 @@ jobs:
           owner: ${{ inputs.owner }}
 
       - name: Rewrite SSH submodule URLs to HTTPS
+        if: env.APP_ID != ''
         run: |
           git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
 
       - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.submodules == 'true' && 'recursive' || '' }}
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Compute versions

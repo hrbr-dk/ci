@@ -63,6 +63,11 @@ jobs:
 Pin to `@v1`. The tag moves only for backwards-compatible changes; anything that
 changes an input's meaning gets `v2`.
 
+The `app-id` / `private-key` secrets are **optional**. They exist for repositories with
+private submodules, where the default `GITHUB_TOKEN` cannot clone a sibling repo.
+A service without submodules can omit them entirely and checkout falls back to
+`GITHUB_TOKEN`, which can always read its own repository.
+
 ## Conventions these workflows assume
 
 - **The chart is the deployable.** Nothing is installed from a local path. Installing
